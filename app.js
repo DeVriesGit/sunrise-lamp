@@ -185,7 +185,10 @@ function render() {
   $("connectBtn").hidden = connected || s.link === "connecting";
   $("connectBtn").textContent = device ? "Reconnect" : "Connect to lamp";
   $("connectHint").hidden = connected || s.link === "connecting" || !!device;
-  $("connectHint").textContent = `A list pops up - tap ${lampName ? `"${lampName}"` : "the lamp"}, then tap Pair. Only needed once.`;
+  // Chrome's own Android permission ("Nearby devices", or Location on older phones) can only be
+  // asked for by Chrome, from its list - a page cannot show that prompt. So say it is coming.
+  $("connectHint").textContent = `A list pops up - tap ${lampName ? `"${lampName}"` : "the lamp"}, then tap Pair. ` +
+    `If Chrome asks to use "Nearby devices" or Location, tap Allow. Only needed once.`;
 
   // On / Off - always on screen; greyed with the reason when unusable.
   const usable = connected && !s.busy;
