@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E1116">
+<title>Sunrise Lamp</title>
+<style>
+  /* Same palette as the Android app (MainActivity.kt). */
+  :root {
+    --bg: #0E1116; --card: #1A1F27; --amber: #FFC65C; --grey: #7A828E;
+    --red: #E5675C; --text: #E8EAED;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 480px; margin: 0 auto; padding: 28px 16px 48px; display: grid; gap: 16px; }
+  h1 { margin: 0; font-size: 28px; font-weight: 600; }
+  h2 { margin: 0; font-size: 20px; font-weight: 500; }
+  .sub { color: var(--grey); font-size: 13px; margin-top: -10px; }
+  .card { background: var(--card); border-radius: 16px; padding: 18px; display: grid; gap: 12px; }
+  .status { display: flex; align-items: center; gap: 14px; }
+  .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--grey); flex: none; }
+  .dot.on { background: var(--amber); } .dot.bad { background: var(--red); }
+  .muted { color: var(--grey); font-size: 14px; }
+  .hint { color: var(--grey); font-size: 13px; }
+  .warn { color: var(--amber); }
+  .err { color: var(--red); }
+  button {
+    font: inherit; border: 0; border-radius: 12px; min-height: 52px; width: 100%; cursor: pointer;
+    background: var(--amber); color: var(--bg); font-size: 16px;
+  }
+  /* Disabled controls stay on screen, greyed, with the reason printed under them. */
+  button:disabled { background: var(--bg); color: var(--grey); cursor: default; }
+  button.outline { background: transparent; color: var(--amber); border: 1px solid var(--grey); }
+  button.outline:disabled { color: var(--grey); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .big { min-height: 88px; border-radius: 18px; font-size: 22px; background: var(--card); color: var(--text); }
+  .big:disabled { background: var(--card); opacity: .5; color: var(--grey); }
+  .time {
+    width: 100%; min-height: 72px; border-radius: 14px; border: 0; background: var(--bg);
+    color: var(--amber); font: 600 44px/1 system-ui, sans-serif; text-align: center; color-scheme: dark;
+  }
+  .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .day { min-height: 48px; border-radius: 10px; background: var(--bg); color: var(--grey); font-size: 14px; font-weight: 500; }
+  .day.on { background: var(--amber); color: var(--bg); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sunrise Lamp</h1>
+  <div class="sub" id="lampName"></div>
+
+  <!-- Shown instead of everything else when this browser cannot do Bluetooth. -->
+  <section class="card" id="unsupported" hidden>
+    <h2>This browser can't reach the lamp</h2>
+    <div class="muted">Open this page in <b>Chrome on an Android phone</b> with Bluetooth on. iPhones
+      (Safari and Chrome alike) do not allow web pages to use Bluetooth.</div>
+  </section>
+
+  <div id="panel" hidden>
+    <div style="display:grid;gap:16px">
+      <section class="card status">
+        <div class="dot" id="dot"></div>
+        <div><h2 id="headline">Not connected</h2><div class="muted" id="detail"></div></div>
+      </section>
+
+      <button id="connectBtn">Connect to lamp</button>
+      <div class="hint" id="connectHint">Chrome will list the lamp - tap it, then Pair.</div>
+
+      <div class="row">
+        <button class="big" id="onBtn" disabled>On</button>
+        <button class="big" id="offBtn" disabled>Off</button>
+      </div>
+      <div class="hint" id="powerHint"></div>
+
+      <section class="card">
+        <h2>Wake-up alarm</h2>
+        <div class="muted" id="stored">Connect to see the lamp's alarm.</div>
+        <input type="time" class="time" id="time" step="60" value="06:00" aria-label="Alarm time">
+        <div class="muted" id="rampText"></div>
+        <div class="days" id="days"></div>
+        <button id="saveBtn" disabled>Save alarm</button>
+        <div class="hint" id="saveHint"></div>
+        <button class="outline" id="clearBtn" hidden>Turn alarm off</button>
+        <div id="alarmMsg"></div>
+      </section>
+    </div>
+  </div>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
