@@ -16,6 +16,22 @@ export class LampError extends Error {}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const CONNECT_TIMEOUT_MS = 10000;
+const STEP_TIMEOUT_MS = 8000;
+
+/**
+ * A Bluetooth promise with a deadline. Android Chrome can leave gatt.connect() (and the steps after
+ * it) pending for ever when an earlier connection went stale - the page then showed "Connecting..."
+ * indefinitely (his report, 25 Oct 2026). Rejects with a TimeoutError after ms.
+ */
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error("timeout"), { name: "TimeoutError" })), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export class LampLink {
   constructor(device) {
     this.device = device;        // a BluetoothDevice the person picked in Chrome's chooser
@@ -42,28 +58,46 @@ export class LampLink {
     return run;
   }
 
-  /** Connect, find the lamp's service, switch replies on, set the lamp's clock. */
+  /**
+   * Connect, find the lamp's service, switch replies on, set the lamp's clock. Every step has a
+   * deadline; a first attempt that stalls is dropped and tried once more before giving up.
+   */
   connect() {
     return this.queue(async () => {
-      let server;
       try {
-        server = await this.device.gatt.connect();
-      } catch {
-        throw new LampError("Lamp not reachable. Is it switched on at the wall, and within a few metres?");
+        await this._open();
+      } catch (first) {
+        if (first instanceof LampError && first.final) throw first;
+        this.close();                 // drop whatever Chrome is stuck on, then one clean retry
+        await sleep(600);
+        try {
+          await this._open();
+        } catch (second) {
+          this.close();
+          if (second instanceof LampError) throw second;
+          throw new LampError("The lamp didn't answer. Check it is switched on at the wall and within a few " +
+            "metres, then tap Connect again.");
+        }
       }
-      try {
-        const service = await server.getPrimaryService(L.SERVICE);
-        this.writeChar = await service.getCharacteristic(L.WRITE_CHAR);
-        const notify = await service.getCharacteristic(L.NOTIFY_CHAR);
-        notify.addEventListener("characteristicvaluechanged", this._onNotify);
-        await notify.startNotifications();
-      } catch {
-        this.close();
-        throw new LampError("That device is not a Sunrise Lamp bulb (no lamp service found).");
-      }
-      this.device.addEventListener("gattserverdisconnected", this._onGone);
-      await this._send(L.setClock(new Date()));
     });
+  }
+
+  async _open() {
+    const server = await withTimeout(this.device.gatt.connect(), CONNECT_TIMEOUT_MS);
+    let service;
+    try {
+      service = await withTimeout(server.getPrimaryService(L.SERVICE), STEP_TIMEOUT_MS);
+    } catch (e) {
+      if (e.name === "TimeoutError") throw e;
+      throw Object.assign(new LampError("That device is not a Sunrise Lamp bulb (no lamp service found)."), { final: true });
+    }
+    this.writeChar = await withTimeout(service.getCharacteristic(L.WRITE_CHAR), STEP_TIMEOUT_MS);
+    const notify = await withTimeout(service.getCharacteristic(L.NOTIFY_CHAR), STEP_TIMEOUT_MS);
+    notify.removeEventListener("characteristicvaluechanged", this._onNotify);
+    notify.addEventListener("characteristicvaluechanged", this._onNotify);
+    await withTimeout(notify.startNotifications(), STEP_TIMEOUT_MS);
+    this.device.addEventListener("gattserverdisconnected", this._onGone);
+    await this._send(L.setClock(new Date()));
   }
 
   readState() { return this.queue(() => this._query()); }
@@ -128,7 +162,7 @@ export class LampLink {
     if (!this.writeChar || !this.device.gatt.connected) throw new LampError("Not connected.");
     const packet = new Uint8Array(L.wrap(++this.seq, inner));
     try {
-      await this.writeChar.writeValueWithResponse(packet);
+      await withTimeout(this.writeChar.writeValueWithResponse(packet), STEP_TIMEOUT_MS);
     } catch {
       throw new LampError(failure);
     }

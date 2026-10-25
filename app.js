@@ -85,7 +85,10 @@ async function connect() {
     set({ link: "connected", lamp });
   } catch (e) {
     c.close();
-    set({ link: "failed", reason: e instanceof LampError ? e.message : "Could not connect. Tap Reconnect." });
+    // Start fresh next time: forget this device object, so the next tap opens Chrome's list again
+    // instead of retrying a connection Chrome may still be stuck on.
+    device = null;
+    set({ link: "failed", reason: e instanceof LampError ? e.message : "Could not connect. Tap Connect again." });
   }
 }
 

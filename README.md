@@ -20,4 +20,4 @@ Personal project. No server, no account, nothing leaves the phone except Bluetoo
 | `lamp.js` | The protocol and the alarm - pure functions, every byte measured on the real lamp |
 | `link.js` | Web Bluetooth: one operation at a time, clock set on connect, 700 ms settle before reading back |
 | `app.js`, `index.html` | The screen |
-| `test/lamp.test.mjs` | `node --test test/lamp.test.mjs` - 19 tests against bytes captured from the lamp |
+| `test/` | `node --test test/` - 23 tests against bytes captured from the lamp, plus the connect deadline and retry against a fake lamp |
