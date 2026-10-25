@@ -30,6 +30,41 @@ export function power(on) {
   return withChecksum(0x71, on ? 0x23 : 0x24, 0x0f);
 }
 
+// Colour and white (measured, Smart Home docs/protocol-findings.md; and on this lamp 25 Oct 2026).
+// One command, 31 R G B WW CW <mask> 0F: mask F0 writes ONLY the colour channels, 0F ONLY the whites.
+// Any of these also ends a built-in effect (the factory-reset lamp ran mode 0x63 until one was sent).
+export function setColour(r, g, b) { return withChecksum(0x31, r, g, b, 0, 0, 0xf0, 0x0f); }
+export function setWhite(warm, cool) { return withChecksum(0x31, 0, 0, 0, warm, cool, 0x0f, 0x0f); }
+
+// The commands for a colour, or for a white. Going to white the colour channels must be zeroed first,
+// or the lamp stays tinted; going to colour the whites must be zeroed, or the colour is washed out.
+export function colourCommands(r, g, b) { return [setWhite(0, 0), setColour(r, g, b)]; }
+export function whiteCommands(warm, cool) { return [setColour(0, 0, 0), setWhite(warm, cool)]; }
+
+// Hue 0-360, saturation 0-1 -> the fully bright RGB of that colour.
+export function hueToRgb(h, s) {
+  const f = (n) => { const k = (n + h / 60) % 6; return 1 - s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  return [f(5), f(3), f(1)].map((v) => Math.round(v * 255));
+}
+// RGB -> hue 0-360, saturation 0-1 and brightness 0-1 (the brightest channel, as Smart Home reads it).
+export function rgbToHsv(r, g, b) {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let h = 0;
+  if (d) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return { h: (h * 60 + 360) % 360, s: max ? d / max : 0, v: max / 255 };
+}
+// A colour at a brightness (0-1): every channel scaled alike, so the hue stays (Smart Home scaleColour).
+export function atBrightness([r, g, b], level) {
+  const k = Math.max(1, Math.round(level * 255)) / 255;
+  return [r, g, b].map((c) => Math.round(c * k));
+}
+// A white at a brightness (0-1) and warmth (0 = all warm, 1 = all cool); warm + cool = the level.
+export function whiteAt(level, coolShare) {
+  const total = Math.max(1, Math.round(level * 255));
+  const cool = Math.round(total * coolShare);
+  return [total - cool, cool];
+}
+
 // Set the lamp's clock - sent on every connect: the alarm runs on it, and these bulbs lose the
 // time at every power cut. Day of week is ISO (1 = Monday ... 7 = Sunday), measured.
 export function setClock(d) {
@@ -93,10 +128,11 @@ export function payloadOf(reply) {
 }
 
 // Two shapes arrive:
-//  81 ...    - answer to QUERY_STATE: power at byte 2, warm at 9, cool at 11.
+//  81 ...    - answer to QUERY_STATE: power at 2, mode at 3 (0x61 static), RGB at 6-8, warm 9, cool 11.
 //  EA 81 ... - pushed after a command: power at byte 6; whites not decoded -> null, not guessed.
 export function parseState(p) {
-  if (p.length >= 14 && p[0] === 0x81) return { on: p[2] === 0x23, warm: p[9], cool: p[11] };
+  if (p.length >= 14 && p[0] === 0x81)
+    return { on: p[2] === 0x23, mode: p[3], red: p[6], green: p[7], blue: p[8], warm: p[9], cool: p[11] };
   if (p.length >= 7 && p[0] === 0xea && p[1] === 0x81) return { on: p[6] === 0x23, warm: null, cool: null };
   return null;
 }

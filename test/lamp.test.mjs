@@ -37,7 +37,7 @@ test("sequence counter wraps at one byte", () => {
 
 test("measured state reply decodes to ON warm 0 cool 255", () => {
   const reply = [...hex("040180000033340a"), ...ascii('{"code":0,"payload":"813523613038000000000AFF0FBA"}')];
-  assert.deepEqual(L.parseState(L.payloadOf(reply)), { on: true, warm: 0, cool: 255 });
+  assert.deepEqual(L.parseState(L.payloadOf(reply)), { on: true, mode: 0x61, red: 0, green: 0, blue: 0, warm: 0, cool: 255 });
 });
 
 test("pushed EA81 status after OFF reads as off with whites unknown", () => {
@@ -60,6 +60,31 @@ test("reply split into 20-byte packets is reassembled", () => {
 
 test("stray packet that is not a reply start is ignored", () => {
   assert.equal(new L.ReplyAssembler().feed(hex("0102030405060708090a")), null);
+});
+
+test("white command is the one that took the reset lamp out of its effect", () => {
+  // Sent 25 Oct 2026: zero RGB, then full warm white -> mode 0x61, held for 60 s.
+  assert.deepEqual(L.whiteCommands(255, 0), [hex("31 00 00 00 00 00 f0 0f 30"), hex("31 00 00 00 ff 00 0f 0f 4e")]);
+});
+
+test("colour command writes only the colour channels after zeroing the whites", () => {
+  assert.deepEqual(L.colourCommands(0, 0, 255), [hex("31 00 00 00 00 00 0f 0f 4f"), hex("31 00 00 ff 00 00 f0 0f 2f")]);
+});
+
+test("the measured effect-mode state reads mode 0x63 and its colour", () => {
+  const s = L.parseState(hex("813523633038ffffff000a00f09b"));
+  assert.equal(s.mode, 0x63);
+  assert.deepEqual([s.red, s.green, s.blue], [255, 255, 255]);
+});
+
+test("colour maths: hue round-trips and brightness keeps the hue", () => {
+  assert.deepEqual(L.hueToRgb(0, 1), [255, 0, 0]);
+  assert.deepEqual(L.hueToRgb(240, 1), [0, 0, 255]);
+  assert.deepEqual(L.hueToRgb(120, 0), [255, 255, 255]);
+  const { h, s, v } = L.rgbToHsv(...L.atBrightness(L.hueToRgb(30, 0.5), 0.5));
+  assert.ok(Math.abs(h - 30) < 2 && Math.abs(s - 0.5) < 0.02 && Math.abs(v - 0.5) < 0.01);
+  assert.deepEqual(L.whiteAt(1, 0), [255, 0]);
+  assert.deepEqual(L.whiteAt(0.5, 0.5), [64, 64]);
 });
 
 // ---- alarm ----

@@ -94,6 +94,11 @@ export class LampLink {
     });
   }
 
+  /** Send commands in order, with no read-back - for the colour wheel and sliders while dragged. */
+  sendCommands(list) {
+    return this.queue(async () => { for (const inner of list) await this._send(inner); });
+  }
+
   // Skip pushed EA-81 statuses; wait for the 81 answer, which carries the whites.
   _query() {
     return this._request(L.QUERY_STATE, (p) => { const s = L.parseState(p); return s && s.warm !== null ? s : null; });

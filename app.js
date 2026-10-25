@@ -143,12 +143,14 @@ function clearAlarm() {
 }
 
 function disconnect() {
+  if (!$("lightView").hidden) showLightView(false);
   conn?.close();
   conn = null;
   if (state.link === "connected" || state.link === "connecting") set({ link: "idle" });
 }
 
 function dropped(reason) {
+  if (!$("lightView").hidden) showLightView(false);
   conn?.close();
   conn = null;
   set({ link: "failed", reason });
@@ -180,9 +182,7 @@ function renderRamp(alarm, unsaved) {
     t.textContent = L.clock(s.hour * 60 + s.minute);
     return t;
   }));
-  $("rampText").textContent = (unsaved ? "Not saved yet. " : "") +
-    `From ${L.rampStart(alarm)} the lamp glows dim and warm, then brightens each minute ` +
-    `to full cool white at ${L.alarmTime(alarm)} - and stays on.`;
+  $("previewTag").hidden = !unsaved;   // while editing, the bars preview the alarm about to be saved
 }
 
 function render() {
@@ -222,6 +222,7 @@ function render() {
   // Alarm card - the answer first (what the LAMP holds), then the editor with its sunrise preview.
   const r = s.reading;
   $("panel").className = connected ? "on" : "off";
+  renderLightCard(connected);
   $("alarmEmpty").hidden = connected;
   $("alarmBody").hidden = !connected;
   $("editCard").hidden = !connected;
@@ -251,10 +252,142 @@ function render() {
   $("alarmMsg").className = "msg" + (s.alarmErr ? " err" : "");
 }
 
+// ---- colour & brightness -------------------------------------------------------------------
+// One panel: White (warmth) or Colour (a wheel), and one brightness slider for both. Every change is
+// sent straight away, but only the LATEST value goes out once the previous send has finished, so a
+// drag never piles commands up on a lamp that takes one operation at a time.
+
+const light = { mode: "white", hue: 30, sat: 1, level: 1, cool: 0 };   // what the panel shows
+let pendingLight = null, sendingLight = false;
+
+/** Fill the panel from what the lamp reported. */
+function lightFromLamp(l) {
+  if (!l) return;
+  if (l.red || l.green || l.blue) {
+    const { h, s, v } = L.rgbToHsv(l.red, l.green, l.blue);
+    Object.assign(light, { mode: "colour", hue: h, sat: s, level: Math.max(0.01, v) });
+  } else if (l.warm !== null && l.warm !== undefined) {
+    const total = l.warm + l.cool;
+    Object.assign(light, { mode: "white", level: Math.max(0.01, Math.min(1, total / 255)), cool: total ? l.cool / total : 0 });
+  }
+}
+
+/** The commands for the panel's current setting (switching the lamp on first if it is off). */
+function lightCommands() {
+  const cmds = state.lamp && !state.lamp.on ? [L.power(true)] : [];
+  if (light.mode === "colour") return [...cmds, ...L.colourCommands(...L.atBrightness(L.hueToRgb(light.hue, light.sat), light.level))];
+  return [...cmds, ...L.whiteCommands(...L.whiteAt(light.level, light.cool))];
+}
+
+function sendLight() {
+  if (!conn) return;
+  pendingLight = lightCommands();
+  // What the lamp will now show - kept locally so the card and the On/Off switch agree.
+  const rgb = light.mode === "colour" ? L.atBrightness(L.hueToRgb(light.hue, light.sat), light.level) : [0, 0, 0];
+  const [warm, cool] = light.mode === "white" ? L.whiteAt(light.level, light.cool) : [0, 0];
+  state.lamp = { ...(state.lamp || {}), on: true, mode: 0x61, red: rgb[0], green: rgb[1], blue: rgb[2], warm, cool };
+  if (!sendingLight) pumpLight();
+}
+
+async function pumpLight() {
+  sendingLight = true;
+  try {
+    while (pendingLight && conn) {
+      const cmds = pendingLight; pendingLight = null;
+      await conn.sendCommands(cmds);
+    }
+  } catch (e) {
+    dropped(e instanceof LampError ? e.message : "Lost the lamp.");
+  } finally {
+    sendingLight = false;
+    render();
+  }
+}
+
+/** The card at the bottom: a swatch and a few words for what the lamp shows now. */
+function renderLightCard(connected) {
+  const l = connected ? state.lamp : null;
+  $("lightBtn").disabled = !connected;
+  if (!l) {
+    $("swatch").style.background = "";
+    $("lightNow").textContent = "Connect to change the lamp's colour.";
+    return;
+  }
+  if (!l.on) { $("swatch").style.background = ""; $("lightNow").textContent = "The lamp is off."; return; }
+  if (l.red || l.green || l.blue) {
+    const { v } = L.rgbToHsv(l.red, l.green, l.blue);
+    const full = L.atBrightness([l.red, l.green, l.blue], 1 / Math.max(v, 0.01)).map((c) => Math.min(255, c));
+    $("swatch").style.background = `rgb(${full.join(",")})`;
+    $("lightNow").textContent = `Colour, ${Math.round(v * 100)} % bright`;
+  } else {
+    const total = (l.warm ?? 0) + (l.cool ?? 0);
+    const share = total ? l.cool / total : 0;
+    $("swatch").style.background = lightColour(1 - share, share);
+    const kind = share < 0.2 ? "Warm white" : share > 0.8 ? "Cool white" : "Neutral white";
+    $("lightNow").textContent = `${kind}, ${Math.round(Math.min(1, total / 255) * 100)} % bright`;
+  }
+}
+
+// The wheel: hue around the circle, saturation from the centre (white) to the edge (full colour).
+function drawWheel() {
+  const c = $("wheel"), ctx = c.getContext("2d"), n = c.width, r = n / 2;
+  const img = ctx.createImageData(n, n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const dx = x - r, dy = y - r, d = Math.hypot(dx, dy);
+    if (d > r) continue;
+    const [R, G, B] = L.hueToRgb((Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360, d / r);
+    const i = (y * n + x) * 4;
+    img.data[i] = R; img.data[i + 1] = G; img.data[i + 2] = B; img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function renderSheet() {
+  const colour = light.mode === "colour";
+  $("modeWhite").setAttribute("aria-pressed", String(!colour));
+  $("modeColour").setAttribute("aria-pressed", String(colour));
+  $("wheelBox").hidden = !colour;
+  $("warmthBox").hidden = colour;
+  $("warmth").value = Math.round(light.cool * 100);
+  $("bright").value = Math.round(light.level * 100);
+  $("brightVal").textContent = `${Math.round(light.level * 100)} %`;
+  const a = light.hue * Math.PI / 180, rad = light.sat * 130;   // 130 px = half the wheel
+  $("wheelMark").style.left = `${130 + rad * Math.cos(a)}px`;
+  $("wheelMark").style.top = `${130 + rad * Math.sin(a)}px`;
+  $("wheelMark").style.background = `rgb(${L.hueToRgb(light.hue, light.sat).join(",")})`;
+}
+
+function setupLightSheet() {
+  drawWheel();
+  $("lightBtn").onclick = () => { lightFromLamp(state.lamp); renderSheet(); showLightView(true); };
+  $("sheetDone").onclick = () => showLightView(false);
+  $("modeWhite").onclick = () => { light.mode = "white"; renderSheet(); sendLight(); };
+  $("modeColour").onclick = () => { light.mode = "colour"; renderSheet(); sendLight(); };
+  $("warmth").oninput = (e) => { light.cool = Number(e.target.value) / 100; renderSheet(); sendLight(); };
+  $("bright").oninput = (e) => { light.level = Number(e.target.value) / 100; renderSheet(); sendLight(); };
+  const pick = (e) => {
+    const box = $("wheel").getBoundingClientRect();
+    const dx = e.clientX - box.left - box.width / 2, dy = e.clientY - box.top - box.height / 2;
+    light.hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    light.sat = Math.min(1, Math.hypot(dx, dy) / (box.width / 2));
+    renderSheet(); sendLight();
+  };
+  const wheel = $("wheel");
+  wheel.addEventListener("pointerdown", (e) => { wheel.setPointerCapture(e.pointerId); pick(e); });
+  wheel.addEventListener("pointermove", (e) => { if (wheel.hasPointerCapture(e.pointerId)) pick(e); });
+}
+
+/** Swap the page for the colour screen and back. */
+function showLightView(open) {
+  $("panel").hidden = open;
+  $("lightView").hidden = !open;
+  window.scrollTo(0, 0);
+  if (open) $("sheetHead").focus(); else { render(); $("lightBtn").focus(); }
+}
+
 // ---- start ----------------------------------------------------------------------------------
 
 function start() {
-  if (lampName) $("lampName").textContent = lampName;
   if (!navigator.bluetooth) { $("unsupported").hidden = false; return; }
   $("panel").hidden = false;
 
@@ -280,6 +413,7 @@ function start() {
   $("offBtn").onclick = () => setPower(false);
   $("saveBtn").onclick = saveAlarm;
   $("clearBtn").onclick = clearAlarm;
+  setupLightSheet();
 
   // Never hold the lamp while the page is in the background - it may take only one connection -
   // and pick it straight back up when the person returns, so they never scan again.
@@ -289,13 +423,18 @@ function start() {
   navigator.bluetooth.getAvailability?.().then((on) => set({ radioOff: !on })).catch(() => {});
   navigator.bluetooth.addEventListener?.("availabilitychanged", (e) => set({ radioOff: !e.value }));
 
-  // ?preview=connected - draws the connected screen with a sample lamp (on, 06:30 weekdays) so the
+  // ?preview=connected (or =colour, with the colour panel open) - draws the connected screen with a sample lamp (on, 06:30 weekdays) so the
   // layout can be checked without a lamp. Touches no Bluetooth; nothing can be saved from it.
-  if (new URLSearchParams(location.search).get("preview") === "connected") {
+  const preview = new URLSearchParams(location.search).get("preview");
+  if (preview === "connected" || preview === "colour") {
     const alarm = { hour: 6, minute: 30, days: L.Days.WEEKDAYS };
     state.draft = { ...alarm };
-    Object.assign(state, { link: "connected", lamp: { on: true, warm: 0, cool: 255 }, reading: { kind: "set", alarm } });
+    Object.assign(state, { link: "connected", lamp: { on: true, mode: 0x61, red: 0, green: 0, blue: 0, warm: 0, cool: 255 }, reading: { kind: "set", alarm } });
     render();
+    if (preview === "colour") {   // the colour panel open on an amber
+      Object.assign(light, { mode: "colour", hue: 38, sat: 0.85, level: 0.8 });
+      renderSheet(); showLightView(true);
+    }
     return;
   }
 
