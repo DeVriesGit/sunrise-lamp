@@ -30,11 +30,31 @@ const state = {
   draftTouched: false,
   alarmBusy: false,
   alarmMsg: null, alarmErr: false,
+  radioOff: false,       // the phone's Bluetooth is switched off (where Chrome can tell)
 };
 let device = null;       // kept for the session so Reconnect does not need the chooser again
 let conn = null;
 
 // ---- actions --------------------------------------------------------------------------------
+
+const isOurLamp = (d) => (lampName ? d.name === lampName : (d.name || "").startsWith(L.NAME_PREFIX));
+
+/**
+ * Connect WITHOUT a tap, if Chrome already lets this page use the lamp (it was picked on an
+ * earlier visit). Needs navigator.bluetooth.getDevices(), which not every Chrome has - where it
+ * is missing this does nothing and the person taps Connect once. Never shows the chooser.
+ */
+async function autoConnect() {
+  if (device || state.link === "connecting" || state.link === "connected") {
+    if (device && state.link !== "connecting" && state.link !== "connected") await connect();
+    return;
+  }
+  if (!navigator.bluetooth.getDevices) return;
+  try {
+    const known = (await navigator.bluetooth.getDevices()).find(isOurLamp);
+    if (known) { device = known; await connect(); }
+  } catch { /* not allowed here - the Connect button still works */ }
+}
 
 async function connect() {
   if (state.link === "connecting" || state.link === "connected") return;
@@ -49,7 +69,7 @@ async function connect() {
   } catch (e) {
     // NotFoundError = the person closed the chooser, or no lamp was in range.
     set({ link: "failed", reason: e.name === "NotFoundError"
-      ? "No lamp chosen. Is the lamp powered and within a few metres? Tap Connect to try again."
+      ? "No lamp chosen. Is the lamp plugged in and within a few metres? Tap Connect to try again."
       : "Bluetooth is off or not allowed. Switch it on and tap Connect." });
     return;
   }
@@ -152,8 +172,10 @@ function render() {
     headline = "Connecting…"; detail = "Talking to the lamp over Bluetooth";
   } else if (s.link === "failed") {
     dot = "bad"; detail = s.reason;
+  } else if (s.radioOff) {
+    dot = "bad"; headline = "Bluetooth is off"; detail = "Switch Bluetooth on in the phone's quick settings, then tap Connect.";
   } else {
-    detail = "Tap Connect to reach the lamp.";
+    detail = "Tap the big button below.";
   }
   $("dot").className = "dot " + dot;
   $("headline").textContent = headline;
@@ -163,6 +185,7 @@ function render() {
   $("connectBtn").hidden = connected || s.link === "connecting";
   $("connectBtn").textContent = device ? "Reconnect" : "Connect to lamp";
   $("connectHint").hidden = connected || s.link === "connecting" || !!device;
+  $("connectHint").textContent = `A list pops up - tap ${lampName ? `"${lampName}"` : "the lamp"}, then tap Pair. Only needed once.`;
 
   // On / Off - always on screen; greyed with the reason when unusable.
   const usable = connected && !s.busy;
@@ -220,9 +243,16 @@ function start() {
   $("saveBtn").onclick = saveAlarm;
   $("clearBtn").onclick = clearAlarm;
 
-  // Never hold the lamp while the page is in the background - it may take only one connection.
-  document.addEventListener("visibilitychange", () => { if (document.hidden) disconnect(); });
+  // Never hold the lamp while the page is in the background - it may take only one connection -
+  // and pick it straight back up when the person returns, so they never scan again.
+  document.addEventListener("visibilitychange", () => { if (document.hidden) disconnect(); else autoConnect(); });
+
+  // Warn about Bluetooth being off BEFORE they try, instead of after a failed chooser.
+  navigator.bluetooth.getAvailability?.().then((on) => set({ radioOff: !on })).catch(() => {});
+  navigator.bluetooth.addEventListener?.("availabilitychanged", (e) => set({ radioOff: !e.value }));
+
   render();
+  autoConnect();
 }
 
 start();
