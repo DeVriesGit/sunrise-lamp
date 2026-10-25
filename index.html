@@ -3,96 +3,201 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#0E1116">
+<meta name="theme-color" content="#0e0d0c">
 <title>Sunrise Lamp</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  /* Same palette as the Android app (MainActivity.kt). */
+  /* Style: taste-skill "true-black-flat" (seed 1509380058), with its face taken from the lamp:
+     a warm near-black ground (a bedroom, not a monitor) and a sunrise amber as the one data hue.
+     Elevation by lightness only - no borders, no shadows. The main action is an inverted white pill;
+     the amber never goes on buttons. */
   :root {
-    --bg: #0E1116; --card: #1A1F27; --amber: #FFC65C; --grey: #7A828E;
-    --red: #E5675C; --text: #E8EAED;
+    --ground: #0e0d0c;   --surface: #181716;  --raised: #2a2826;
+    --text: #ffffff;     --muted: #b4b4b4;    --faint: #949494;
+    --accent: #f2b33d;   /* sunrise amber: data only (the alarm time, the ramp) */
+    --negative: #e5484d;
+    --pill-warning-bg: #2b2414; --pill-warning-ink: #e5a93b;
+    --pill-negative-bg: #2c1a20; --pill-negative-ink: #e5566f;
+    --radius-card: 20px; --gap: 14px; --pad: 22px;
+    --font: "Inter", system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--ground); color: var(--text); font: 400 15px/1.45 var(--font); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* Frame: one column on a phone; two at desktop width (the lamp left, the alarm right). */
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+         max-width: 980px; margin: 0 auto; padding: 14px 16px; min-height: 56px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand svg { flex: none; }
+  .brand h1 { font-size: 18px; line-height: 1.2; }
+  .brand span { color: var(--faint); font-size: 13px; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .status i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .status.on i { background: var(--accent); }
+  .status.bad i { background: var(--negative); }
+  main { max-width: 980px; margin: 0 auto; padding: 4px 16px 40px; display: grid; gap: var(--gap); }
+  /* Desktop: two columns whose blocks end level. Grid arithmetic: 980 max - 2 x 24 padding = 932
+     = 2 x 459 + 14 gap. Not connected: Connect | Lamp over Alarm. Connected: Lamp over Alarm | Change. */
+  /* Desktop: two columns whose blocks end level. Grid arithmetic: 980 max - 2 x 24 padding = 932
+     = 2 x 459 + 14 gap. Not connected: Connect across the top, Lamp | Alarm below.
+     Connected: the alarm and its sunrise down the left (the chart grows to the column's height),
+     Lamp over Change-the-alarm on the right. */
+  @media (min-width: 900px) {
+    main { grid-template-columns: 1fr 1fr; align-items: stretch; }
+    main.off { grid-template-areas: "connect connect" "lamp alarm"; }
+    main.on  { grid-template-areas: "alarm lamp" "alarm edit"; }
+    #connectCard { grid-area: connect; } #lampCard { grid-area: lamp; align-content: start; }
+    #alarmCard { grid-area: alarm; align-content: start; } #editCard { grid-area: edit; align-content: start; }
+    main.on #alarmCard { display: flex; flex-direction: column; }
+    main.on #alarmBody { flex: 1; display: flex !important; flex-direction: column; }
+    main.on #alarmBody[hidden] { display: none !important; }
+    main.on .ramp-wrap { flex: 1; display: flex; flex-direction: column; }
+    main.on .ramp { flex: 1; height: auto; min-height: 96px; }
+    .bar, main { padding-left: 24px; padding-right: 24px; }
   }
-  main { max-width: 480px; margin: 0 auto; padding: 28px 16px 48px; display: grid; gap: 16px; }
-  h1 { margin: 0; font-size: 28px; font-weight: 600; }
-  h2 { margin: 0; font-size: 20px; font-weight: 500; }
-  .sub { color: var(--grey); font-size: 13px; margin-top: -10px; }
-  .card { background: var(--card); border-radius: 16px; padding: 18px; display: grid; gap: 12px; }
-  .status { display: flex; align-items: center; gap: 14px; }
-  .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--grey); flex: none; }
-  .dot.on { background: var(--amber); } .dot.bad { background: var(--red); }
-  .muted { color: var(--grey); font-size: 14px; }
-  .hint { color: var(--grey); font-size: 13px; }
-  .warn { color: var(--amber); }
-  .err { color: var(--red); }
-  button {
-    font: inherit; border: 0; border-radius: 12px; min-height: 52px; width: 100%; cursor: pointer;
-    background: var(--amber); color: var(--bg); font-size: 16px;
-  }
-  /* Disabled controls stay on screen, greyed, with the reason printed under them. */
-  button:disabled { background: var(--bg); color: var(--grey); cursor: default; }
-  button.outline { background: transparent; color: var(--amber); border: 1px solid var(--grey); }
-  button.outline:disabled { color: var(--grey); }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .big { min-height: 88px; border-radius: 18px; font-size: 22px; background: var(--card); color: var(--text); }
-  .big:disabled { background: var(--card); opacity: .5; color: var(--grey); }
-  .time {
-    width: 100%; min-height: 72px; border-radius: 14px; border: 0; background: var(--bg);
-    color: var(--amber); font: 600 44px/1 system-ui, sans-serif; text-align: center; color-scheme: dark;
-  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  h2.big { font-size: 20px; letter-spacing: -0.01em; }
+  .card { background: var(--surface); border-radius: var(--radius-card); padding: var(--pad); display: grid; gap: 14px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0; }
+  .meta { color: var(--faint); font-size: 13px; margin: 0; }
+
+  /* Buttons: the one primary is an inverted white pill; secondary is a raised pill; all >= 48px. */
+  button { font: inherit; cursor: pointer; border: 0; }
+  .primary, .secondary { min-height: 52px; border-radius: 999px; font-size: 16px; font-weight: 600; width: 100%; padding: 0 22px; }
+  .primary { background: var(--text); color: #000; }
+  .secondary { background: var(--raised); color: var(--text); font-weight: 500; }
+  .primary:disabled, .secondary:disabled { background: var(--raised); color: var(--faint); cursor: default; }
+  .link { background: none; color: var(--negative); font-size: 15px; font-weight: 500; padding: 12px 0; justify-self: start; min-height: 44px; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  button:not(:disabled):active { transform: scale(0.98); }
+
+  /* Connect card */
+  ol.steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 15px; }
+  ol.steps b { font-weight: 600; }
+  .notice { border-radius: 12px; padding: 12px 14px; font-size: 14px; background: var(--pill-warning-bg); color: var(--pill-warning-ink); margin: 0; }
+  .notice.bad { background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
+
+  /* Lamp card: the state, and an On/Off segmented track (selected = inverted). */
+  .state { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .track { display: grid; grid-template-columns: 1fr 1fr; background: var(--raised); border-radius: 999px; padding: 4px; gap: 4px; }
+  .track button { min-height: 48px; border-radius: 999px; background: transparent; color: var(--muted); font-size: 16px; font-weight: 500; }
+  .track button[aria-pressed="true"] { background: var(--text); color: #000; font-weight: 600; }
+  .track button:disabled { color: var(--faint); cursor: default; }
+
+  /* Alarm card */
+  .answer { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .answer .time { font-size: 36px; font-weight: 600; letter-spacing: -0.02em; color: var(--accent); line-height: 1; }
+  .answer .time.none { color: var(--faint); }
+  /* The sunrise: one bar per timer step. Height = brightness, colour = the white the lamp gives. */
+  .ramp { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; align-items: end; height: 96px;
+          background: var(--ground); border-radius: 14px; padding: 12px 12px 0; }
+  .ramp div { border-radius: 4px 4px 0 0; min-height: 3px; }
+  .ramp-axis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; padding: 0 12px; margin-top: 6px; }
+  .ramp-axis span { text-align: center; font-size: 12px; color: var(--faint); }
+  .ramp-axis span:last-child { color: var(--text); font-weight: 600; }
+  .field { display: grid; gap: 8px; }
+  .field > span { font-size: 14px; font-weight: 500; color: var(--muted); }
+  .time-in { width: 100%; min-height: 64px; border-radius: 14px; border: 0; background: var(--raised); color: var(--text);
+             font: 600 32px/1 var(--font); text-align: center; color-scheme: dark; font-variant-numeric: tabular-nums; }
   .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
-  .day { min-height: 48px; border-radius: 10px; background: var(--bg); color: var(--grey); font-size: 14px; font-weight: 500; }
-  .day.on { background: var(--amber); color: var(--bg); }
-  /* The one thing a first-time visitor has to find. */
-  #connectBtn { min-height: 76px; border-radius: 18px; font-size: 21px; font-weight: 600; }
-  #connectHint { font-size: 15px; color: var(--text); text-align: center; }
+  .day { min-height: 48px; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: 14px; font-weight: 500; }
+  .day[aria-pressed="true"] { background: var(--text); color: #000; font-weight: 600; }
+  .msg { margin: 0; font-size: 15px; }
+  .msg.err { color: var(--pill-negative-ink); }
+  .empty { margin: 0; color: var(--muted); font-size: 15px; padding: 18px; background: var(--ground); border-radius: 14px; }
+  .foot { display: grid; gap: 10px; }
+  .msg:empty { display: none; }
   [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { button:not(:disabled):active { transform: none; } }
 </style>
 </head>
 <body>
-<main>
-  <h1>Sunrise Lamp</h1>
-  <div class="sub" id="lampName"></div>
+<header class="bar">
+  <div class="brand">
+    <!-- The mark: a sun rising over a horizon, in the one data hue. -->
+    <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+      <path d="M5 19a9 9 0 0 1 18 0z" fill="#f2b33d"/>
+      <rect x="2" y="21" width="24" height="2.4" rx="1.2" fill="#ffffff"/>
+    </svg>
+    <div><h1>Sunrise Lamp</h1><span id="lampName">Bedside lamp</span></div>
+  </div>
+  <div class="status" id="status" role="status"><i></i><span id="statusText">Not connected</span></div>
+</header>
 
-  <!-- Shown instead of everything else when this browser cannot do Bluetooth. -->
-  <section class="card" id="unsupported" hidden>
-    <h2>This browser can't reach the lamp</h2>
-    <div class="muted">Open this page in <b>Chrome on an Android phone</b> with Bluetooth on. iPhones
-      (Safari and Chrome alike) do not allow web pages to use Bluetooth.</div>
+<!-- Shown instead of everything else when this browser cannot do Bluetooth. -->
+<main id="unsupported" hidden>
+  <section class="card">
+    <h2>Open this in Chrome on Android</h2>
+    <p class="sub">The lamp is set over Bluetooth, and only Chrome on an Android phone lets a web page use it.
+      iPhones (Safari and Chrome alike) cannot.</p>
+  </section>
+</main>
+
+<main id="panel" class="off" hidden>
+  <!-- Not connected: the one job is to connect. -->
+  <section class="card" id="connectCard">
+    <h2 id="connectTitle" class="big">Connect to your lamp</h2>
+    <ol class="steps" id="steps">
+      <li>Tap <b>Connect</b>.</li>
+      <li>Choose <b id="stepName">the lamp</b> in the list, then <b>Pair</b>.</li>
+      <li>If Chrome asks for <b>Nearby devices</b> or <b>Location</b>, tap <b>Allow</b>.</li>
+    </ol>
+    <p class="meta" id="onceNote">Only needed the first time on this phone.</p>
+    <div class="foot">
+      <p class="notice" id="notice" hidden></p>
+      <button class="primary" id="connectBtn">Connect</button>
+    </div>
   </section>
 
-  <div id="panel" hidden>
-    <div style="display:grid;gap:16px">
-      <section class="card status">
-        <div class="dot" id="dot"></div>
-        <div><h2 id="headline">Not connected</h2><div class="muted" id="detail"></div></div>
-      </section>
-
-      <button id="connectBtn">Connect to lamp</button>
-      <div class="hint" id="connectHint">Chrome will list the lamp - tap it, then Pair.</div>
-
-      <div class="row">
-        <button class="big" id="onBtn" disabled>On</button>
-        <button class="big" id="offBtn" disabled>Off</button>
+  <!-- The answer: the wake-up alarm as the LAMP holds it (read from it, never a default), and
+       the sunrise it will run. -->
+  <section class="card" id="alarmCard" aria-labelledby="alarmHead">
+    <h2 id="alarmHead">Wake-up alarm</h2>
+    <p class="empty" id="alarmEmpty">The lamp's alarm shows here once you are connected.</p>
+    <div id="alarmBody" hidden style="display:grid;gap:14px">
+      <div>
+        <div class="answer"><span class="time num" id="storedTime">—</span><span class="sub" id="storedDays"></span></div>
+        <p class="meta" id="storedNote"></p>
       </div>
-      <div class="hint" id="powerHint"></div>
-
-      <section class="card">
-        <h2>Wake-up alarm</h2>
-        <div class="muted" id="stored">Connect to see the lamp's alarm.</div>
-        <input type="time" class="time" id="time" step="60" value="06:00" aria-label="Alarm time">
-        <div class="muted" id="rampText"></div>
-        <div class="days" id="days"></div>
-        <button id="saveBtn" disabled>Save alarm</button>
-        <div class="hint" id="saveHint"></div>
-        <button class="outline" id="clearBtn" hidden>Turn alarm off</button>
-        <div id="alarmMsg"></div>
-      </section>
+      <div class="ramp-wrap" aria-hidden="true">
+        <div class="ramp" id="ramp"></div>
+        <div class="ramp-axis num" id="rampAxis"></div>
+      </div>
+      <p class="meta" id="rampText"></p>
     </div>
-  </div>
+  </section>
+
+  <!-- The lamp right now. -->
+  <section class="card" id="lampCard" aria-labelledby="lampHead">
+    <h2 id="lampHead">Lamp</h2>
+    <p class="state num" id="stateText" hidden></p>
+    <p class="meta" id="stateDetail">Connect to see the lamp and switch it.</p>
+    <div class="track" role="group" aria-label="Switch the lamp">
+      <button id="onBtn" aria-pressed="false" disabled>On</button>
+      <button id="offBtn" aria-pressed="false" disabled>Off</button>
+    </div>
+  </section>
+
+  <!-- The editor. -->
+  <section class="card" id="editCard" aria-labelledby="editHead" hidden>
+    <h2 id="editHead">Change the alarm</h2>
+    <label class="field"><span>Wake me at</span>
+      <input type="time" class="time-in" id="time" step="60" value="06:30">
+    </label>
+    <div class="field"><span id="daysLabel">On these days</span>
+      <div class="days" id="days" role="group" aria-labelledby="daysLabel"></div>
+    </div>
+    <div class="foot">
+      <button class="primary" id="saveBtn">Save alarm</button>
+      <p class="meta" id="saveHint" hidden></p>
+      <p class="msg" id="alarmMsg" role="status"></p>
+      <button class="link" id="clearBtn" hidden>Turn alarm off</button>
+    </div>
+  </section>
 </main>
 <script type="module" src="app.js"></script>
 </body>

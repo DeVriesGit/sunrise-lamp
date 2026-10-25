@@ -158,88 +158,123 @@ function dropped(reason) {
 
 function set(changes) { Object.assign(state, changes); render(); }
 
+// The white the lamp actually gives at a step: warm white ~2700 K, cool white ~6500 K, mixed by
+// the step's cool share. Drawn at full brightness - the bar's HEIGHT carries the brightness.
+const WARM_RGB = [255, 170, 90], COOL_RGB = [214, 228, 255];
+function lightColour(warm, cool) {
+  const t = warm + cool ? cool / (warm + cool) : 0;
+  const c = WARM_RGB.map((w, i) => Math.round(w + (COOL_RGB[i] - w) * t));
+  return `rgb(${c.join(",")})`;
+}
+
+function renderRamp(alarm, unsaved) {
+  const slots = L.alarmSlots(alarm);
+  $("ramp").replaceChildren(...slots.map((s) => {
+    const bar = document.createElement("div");
+    bar.style.height = `${Math.max(3, Math.round(((s.warm + s.cool) / 255) * 100))}%`;
+    bar.style.background = lightColour(s.warm, s.cool);
+    return bar;
+  }));
+  $("rampAxis").replaceChildren(...slots.map((s) => {
+    const t = document.createElement("span");
+    t.textContent = L.clock(s.hour * 60 + s.minute);
+    return t;
+  }));
+  $("rampText").textContent = (unsaved ? "Not saved yet. " : "") +
+    `From ${L.rampStart(alarm)} the lamp glows dim and warm, then brightens each minute ` +
+    `to full cool white at ${L.alarmTime(alarm)} - and stays on.`;
+}
+
 function render() {
-  const connected = state.link === "connected";
   const s = state;
+  const connected = s.link === "connected";
+  const connecting = s.link === "connecting";
 
-  // Status card
-  let dot = "", headline = "Not connected", detail = "";
-  if (connected) {
-    dot = s.lamp?.on ? "on" : "";
-    headline = s.lamp?.on ? "Lamp is ON" : "Lamp is OFF";
-    detail = s.lamp?.on && s.lamp.warm !== null ? `warm ${s.lamp.warm} · cool ${s.lamp.cool}` : "Connected";
-  } else if (s.link === "connecting") {
-    headline = "Connecting…"; detail = "Talking to the lamp over Bluetooth";
-  } else if (s.link === "failed") {
-    dot = "bad"; detail = s.reason;
-  } else if (s.radioOff) {
-    dot = "bad"; headline = "Bluetooth is off"; detail = "Switch Bluetooth on in the phone's quick settings, then tap Connect.";
-  } else {
-    detail = "Tap the big button below.";
-  }
-  $("dot").className = "dot " + dot;
-  $("headline").textContent = headline;
-  $("detail").textContent = detail;
+  // Top bar: where the connection stands, in words.
+  $("status").className = "status" + (connected ? " on" : s.link === "failed" ? " bad" : "");
+  $("statusText").textContent = connected ? "Connected" : connecting ? "Connecting…" : "Not connected";
 
-  // Connect / Reconnect - only while not connected.
-  $("connectBtn").hidden = connected || s.link === "connecting";
-  $("connectBtn").textContent = device ? "Reconnect" : "Connect to lamp";
-  $("connectHint").hidden = connected || s.link === "connecting" || !!device;
-  // Chrome's own Android permission ("Nearby devices", or Location on older phones) can only be
-  // asked for by Chrome, from its list - a page cannot show that prompt. So say it is coming.
-  $("connectHint").textContent = `A list pops up - tap ${lampName ? `"${lampName}"` : "the lamp"}, then tap Pair. ` +
-    `If Chrome asks to use "Nearby devices" or Location, tap Allow. Only needed once.`;
+  // Connect card - only while not connected. A first visit sees the three steps; a return visit
+  // (the lamp already picked this session) just sees Reconnect.
+  $("connectCard").hidden = connected;
+  $("connectTitle").textContent = connecting ? "Connecting to your lamp…"
+    : s.link === "failed" ? "Couldn't reach the lamp" : "Connect to your lamp";
+  $("steps").hidden = $("onceNote").hidden = !!device;
+  $("stepName").textContent = lampName ? `"${lampName}"` : "the lamp";
+  const notice = s.link === "failed" ? s.reason
+    : s.radioOff ? "Bluetooth is off. Switch it on in the phone's quick settings." : "";
+  $("notice").hidden = !notice;
+  $("notice").textContent = notice;
+  $("notice").className = "notice" + (s.link === "failed" ? " bad" : "");
+  $("connectBtn").disabled = connecting;
+  $("connectBtn").textContent = connecting ? "Connecting…" : device ? "Reconnect" : "Connect";
 
-  // On / Off - always on screen; greyed with the reason when unusable.
-  const usable = connected && !s.busy;
-  $("onBtn").disabled = $("offBtn").disabled = !usable;
-  $("powerHint").textContent = usable ? "" : s.busy ? "Waiting for the lamp…"
-    : s.link === "connecting" ? "The buttons work once the lamp is connected." : "Not connected - tap Connect.";
+  // Lamp card - its state, and the switch. Greyed with the reason while not connected.
+  const on = connected && s.lamp ? s.lamp.on : null;
+  $("stateText").textContent = on === null ? "" : on ? "On" : "Off";
+  $("stateText").hidden = on === null;   // no big dash: at that size a dash reads as "loading"
+  $("stateDetail").textContent = !connected ? "Connect to see the lamp and switch it." : s.busy ? "Switching…" : "";
+  $("stateDetail").hidden = connected && !s.busy;
+  $("onBtn").disabled = $("offBtn").disabled = !connected || s.busy;
+  $("onBtn").setAttribute("aria-pressed", String(on === true));
+  $("offBtn").setAttribute("aria-pressed", String(on === false));
 
-  // Alarm - what the LAMP holds, read from it, not remembered by the phone.
+  // Alarm card - the answer first (what the LAMP holds), then the editor with its sunrise preview.
   const r = s.reading;
-  $("stored").textContent = !r ? (connected ? "Reading the lamp…" : "Connect to see the lamp's alarm.")
-    : r.kind === "none" ? "No alarm set on the lamp."
-    : r.kind === "set" ? `On the lamp: ${L.alarmTime(r.alarm)}, ${L.Days.describe(r.alarm.days)}.`
+  $("panel").className = connected ? "on" : "off";
+  $("alarmEmpty").hidden = connected;
+  $("alarmBody").hidden = !connected;
+  $("editCard").hidden = !connected;
+  if (!connected) return;
+
+  $("storedTime").textContent = r?.kind === "set" ? L.alarmTime(r.alarm) : r?.kind === "none" ? "Off" : "—";
+  $("storedTime").className = "time num" + (r?.kind === "set" ? "" : " none");
+  $("storedDays").textContent = r?.kind === "set" ? L.Days.describe(r.alarm.days) : "";
+  $("storedNote").textContent = !r ? "Reading the lamp…"
+    : r.kind === "none" ? "No alarm on the lamp yet. Set one below."
+    : r.kind === "set" ? `The lamp starts brightening at ${L.rampStart(r.alarm)}.`
     : "The lamp holds timers from another app. Saving an alarm replaces them.";
-  $("stored").className = "muted" + (r?.kind === "foreign" ? " warn" : "");
 
   const d = s.draft;
   if (document.activeElement !== $("time")) $("time").value = L.alarmTime(d);
-  $("rampText").textContent = `Brightens from ${L.rampStart(d)}, fully on at ${L.alarmTime(d)}, then stays on.`;
-  for (const chip of $("days").children) chip.classList.toggle("on", !!(d.days & Number(chip.dataset.bit)));
-
+  for (const chip of $("days").children) chip.setAttribute("aria-pressed", String(!!(d.days & Number(chip.dataset.bit))));
   const unsaved = r?.kind !== "set" || r.alarm.hour !== d.hour || r.alarm.minute !== d.minute || r.alarm.days !== d.days;
-  const blocker = !connected ? "Connect to the lamp to save." : s.alarmBusy ? "Talking to the lamp…"
-    : !d.days ? "Tick at least one day." : null;
-  $("saveBtn").textContent = unsaved ? "Save alarm" : "Saved";
-  $("saveBtn").disabled = !!blocker || !unsaved;
+  renderRamp(d, unsaved);   // the lamp's sunrise; while editing, a preview of the one about to be saved
+  const blocker = s.alarmBusy ? null : !d.days ? "Pick at least one day." : null;
+  $("saveBtn").textContent = s.alarmBusy ? "Saving…" : unsaved ? "Save alarm" : "Saved on the lamp";
+  $("saveBtn").disabled = s.alarmBusy || !!blocker || !unsaved;
+  $("saveHint").hidden = !blocker;
   $("saveHint").textContent = blocker ?? "";
   $("clearBtn").hidden = !(r?.kind === "set" || r?.kind === "foreign");
-  $("clearBtn").disabled = !connected || s.alarmBusy;
+  $("clearBtn").disabled = s.alarmBusy;
   $("alarmMsg").textContent = s.alarmMsg ?? "";
-  $("alarmMsg").className = s.alarmErr ? "err" : "";
+  $("alarmMsg").className = "msg" + (s.alarmErr ? " err" : "");
 }
 
 // ---- start ----------------------------------------------------------------------------------
 
 function start() {
-  if (lampName) $("lampName").textContent = `Lamp ${lampName}`;
+  if (lampName) $("lampName").textContent = lampName;
   if (!navigator.bluetooth) { $("unsupported").hidden = false; return; }
   $("panel").hidden = false;
 
-  // Day chips, Monday first; each is a 48 px tap target.
+  // Day chips, Monday first; each is a 48 px toggle button with its state in aria-pressed.
   for (const [bit, name] of L.Days.MONDAY_FIRST) {
     const b = document.createElement("button");
     b.className = "day"; b.dataset.bit = bit; b.textContent = name.slice(0, 2);
+    b.setAttribute("aria-label", name);
     b.onclick = () => { state.draft.days ^= bit; state.draftTouched = true; set({ alarmMsg: null }); };
     $("days").appendChild(b);
   }
-  $("time").addEventListener("change", (e) => {
-    const [h, m] = (e.target.value || "06:00").split(":").map(Number);
+  // "input" as well as "change", so the sunrise preview follows the picker as it turns.
+  const onTime = (e) => {
+    if (!e.target.value) return;
+    const [h, m] = e.target.value.split(":").map(Number);
     state.draft.hour = h; state.draft.minute = m; state.draftTouched = true;
     set({ alarmMsg: null });
-  });
+  };
+  $("time").addEventListener("input", onTime);
+  $("time").addEventListener("change", onTime);
   $("connectBtn").onclick = connect;
   $("onBtn").onclick = () => setPower(true);
   $("offBtn").onclick = () => setPower(false);
@@ -253,6 +288,16 @@ function start() {
   // Warn about Bluetooth being off BEFORE they try, instead of after a failed chooser.
   navigator.bluetooth.getAvailability?.().then((on) => set({ radioOff: !on })).catch(() => {});
   navigator.bluetooth.addEventListener?.("availabilitychanged", (e) => set({ radioOff: !e.value }));
+
+  // ?preview=connected - draws the connected screen with a sample lamp (on, 06:30 weekdays) so the
+  // layout can be checked without a lamp. Touches no Bluetooth; nothing can be saved from it.
+  if (new URLSearchParams(location.search).get("preview") === "connected") {
+    const alarm = { hour: 6, minute: 30, days: L.Days.WEEKDAYS };
+    state.draft = { ...alarm };
+    Object.assign(state, { link: "connected", lamp: { on: true, warm: 0, cool: 255 }, reading: { kind: "set", alarm } });
+    render();
+    return;
+  }
 
   render();
   autoConnect();
