@@ -15,7 +15,7 @@
   :root {
     --ground: #0e0d0c;   --surface: #181716;  --raised: #2a2826;
     --text: #ffffff;     --muted: #b4b4b4;    --faint: #949494;
-    --accent: #f2b33d;   /* sunrise amber: data only (the alarm time, the ramp) */
+    --accent: #f2b33d;   /* sunrise amber: the mark and the connected dot only */
     --negative: #e5484d;
     --pill-warning-bg: #2b2414; --pill-warning-ink: #e5a93b;
     --pill-negative-bg: #2c1a20; --pill-negative-ink: #e5566f;
@@ -39,21 +39,15 @@
   .status.bad i { background: var(--negative); }
   main { max-width: 980px; margin: 0 auto; padding: 4px 16px 40px; display: grid; gap: var(--gap); }
   /* Desktop: two columns whose blocks end level. Grid arithmetic: 980 max - 2 x 24 padding = 932
-     = 2 x 459 + 14 gap. Not connected: Connect across the top, Lamp | Schedule, Colour across.
-     Connected: Lamp over Change-the-alarm on the left, the schedule and its sunrise down the right
-     (the chart grows to the column's height), Colour across the bottom. */
+     = 2 x 459 + 14 gap. Not connected: Connect across the top, Lamp | Colour, the alarm line across.
+     Connected: Lamp over Colour on the left, the alarm down the right. */
   @media (min-width: 900px) {
     main { grid-template-columns: 1fr 1fr; align-items: stretch; }
-    main.off { grid-template-areas: "connect connect" "lamp alarm" "light light"; }
-    main.on  { grid-template-areas: "lamp alarm" "edit alarm" "light light"; }
+    main.off { grid-template-areas: "connect connect" "lamp light" "edit edit"; }
+    main.on  { grid-template-areas: "lamp edit" "light edit"; }
     #connectCard { grid-area: connect; } #lampCard { grid-area: lamp; align-content: start; }
-    #alarmCard { grid-area: alarm; align-content: start; } #editCard { grid-area: edit; align-content: start; }
+    #editCard { grid-area: edit; align-content: start; }
     #lightCard { grid-area: light; }
-    main.on #alarmCard { display: flex; flex-direction: column; }
-    main.on #alarmBody { flex: 1; display: flex !important; flex-direction: column; }
-    main.on #alarmBody[hidden] { display: none !important; }
-    main.on .ramp-wrap { flex: 1; display: flex; flex-direction: column; }
-    main.on .ramp { flex: 1; height: auto; min-height: 96px; }
     .bar, main { padding-left: 24px; padding-right: 24px; }
   }
   h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
@@ -87,16 +81,6 @@
   .track button:disabled { color: var(--faint); cursor: default; }
 
   /* Alarm card */
-  .answer { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  .answer .time { font-size: 36px; font-weight: 600; letter-spacing: -0.02em; color: var(--accent); line-height: 1; }
-  .answer .time.none { color: var(--faint); }
-  /* The sunrise: one bar per timer step. Height = brightness, colour = the white the lamp gives. */
-  .ramp { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; align-items: end; height: 96px;
-          background: var(--ground); border-radius: 14px; padding: 12px 12px 0; }
-  .ramp div { border-radius: 4px 4px 0 0; min-height: 3px; }
-  .ramp-axis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; padding: 0 12px; margin-top: 6px; }
-  .ramp-axis span { text-align: center; font-size: 12px; color: var(--faint); }
-  .ramp-axis span:last-child { color: var(--text); font-weight: 600; }
   .field { display: grid; gap: 8px; }
   .field > span { font-size: 14px; font-weight: 500; color: var(--muted); }
   .time-in { width: 100%; min-height: 64px; border-radius: 14px; border: 0; background: var(--raised); color: var(--text);
@@ -178,27 +162,11 @@
     </div>
   </section>
 
-  <!-- The answer: the wake-up alarm as the LAMP holds it (read from it, never a default), and
-       the sunrise it will run. -->
-  <section class="card" id="alarmCard" aria-labelledby="alarmHead">
-    <h2 id="alarmHead">Lamp wake-up schedule</h2>
-    <p class="empty" id="alarmEmpty">The lamp's schedule shows here once you are connected.</p>
-    <div id="alarmBody" hidden style="display:grid;gap:14px">
-      <div>
-        <div class="answer"><span class="time num" id="storedTime">—</span><span class="sub" id="storedDays"></span></div>
-        <p class="meta" id="storedNote"></p>
-      </div>
-      <p class="meta" id="previewTag" hidden>Preview - not saved yet.</p>
-      <div class="ramp-wrap" aria-hidden="true">
-        <div class="ramp" id="ramp"></div>
-        <div class="ramp-axis num" id="rampAxis"></div>
-      </div>
-    </div>
-  </section>
-
   <!-- The editor. -->
-  <section class="card" id="editCard" aria-labelledby="editHead" hidden>
-    <h2 id="editHead">Change the alarm</h2>
+  <section class="card" id="editCard" aria-labelledby="editHead">
+    <h2 id="editHead">Wake-up alarm</h2>
+    <p class="sub" id="storedNote">Connect to see and set the lamp's wake-up alarm.</p>
+    <div id="editBody" hidden style="display:grid;gap:14px">
     <label class="field"><span>Wake me at</span>
       <input type="time" class="time-in" id="time" step="60" value="06:30">
     </label>
@@ -210,6 +178,7 @@
       <p class="meta" id="saveHint" hidden></p>
       <p class="msg" id="alarmMsg" role="status"></p>
       <button class="link" id="clearBtn" hidden>Turn alarm off</button>
+    </div>
     </div>
   </section>
 

@@ -160,29 +160,12 @@ function dropped(reason) {
 
 function set(changes) { Object.assign(state, changes); render(); }
 
-// The white the lamp actually gives at a step: warm white ~2700 K, cool white ~6500 K, mixed by
-// the step's cool share. Drawn at full brightness - the bar's HEIGHT carries the brightness.
+// The white the lamp gives for a warm/cool mix (~2700 K to ~6500 K) - the colour card's swatch.
 const WARM_RGB = [255, 170, 90], COOL_RGB = [214, 228, 255];
 function lightColour(warm, cool) {
   const t = warm + cool ? cool / (warm + cool) : 0;
   const c = WARM_RGB.map((w, i) => Math.round(w + (COOL_RGB[i] - w) * t));
   return `rgb(${c.join(",")})`;
-}
-
-function renderRamp(alarm, unsaved) {
-  const slots = L.alarmSlots(alarm);
-  $("ramp").replaceChildren(...slots.map((s) => {
-    const bar = document.createElement("div");
-    bar.style.height = `${Math.max(3, Math.round(((s.warm + s.cool) / 255) * 100))}%`;
-    bar.style.background = lightColour(s.warm, s.cool);
-    return bar;
-  }));
-  $("rampAxis").replaceChildren(...slots.map((s) => {
-    const t = document.createElement("span");
-    t.textContent = L.clock(s.hour * 60 + s.minute);
-    return t;
-  }));
-  $("previewTag").hidden = !unsaved;   // while editing, the bars preview the alarm about to be saved
 }
 
 function render() {
@@ -219,28 +202,23 @@ function render() {
   $("onBtn").setAttribute("aria-pressed", String(on === true));
   $("offBtn").setAttribute("aria-pressed", String(on === false));
 
-  // Alarm card - the answer first (what the LAMP holds), then the editor with its sunrise preview.
+  // Alarm card - one line for what the LAMP holds (read from it, never a default), then the editor.
   const r = s.reading;
   $("panel").className = connected ? "on" : "off";
   renderLightCard(connected);
-  $("alarmEmpty").hidden = connected;
-  $("alarmBody").hidden = !connected;
-  $("editCard").hidden = !connected;
-  if (!connected) return;
+  $("editBody").hidden = !connected;
+  if (!connected) { $("storedNote").textContent = "Connect to see and set the lamp's wake-up alarm."; return; }
 
-  $("storedTime").textContent = r?.kind === "set" ? L.alarmTime(r.alarm) : r?.kind === "none" ? "Off" : "—";
-  $("storedTime").className = "time num" + (r?.kind === "set" ? "" : " none");
-  $("storedDays").textContent = r?.kind === "set" ? L.Days.describe(r.alarm.days) : "";
   $("storedNote").textContent = !r ? "Reading the lamp…"
-    : r.kind === "none" ? "No alarm on the lamp yet. Set one below."
-    : r.kind === "set" ? `The lamp starts brightening at ${L.rampStart(r.alarm)}.`
+    : r.kind === "none" ? "No alarm on the lamp yet."
+    : r.kind === "set" ? `On the lamp: ${L.alarmTime(r.alarm)}, ${L.Days.describe(r.alarm.days)}. ` +
+      `It starts brightening at ${L.rampStart(r.alarm)}.`
     : "The lamp holds timers from another app. Saving an alarm replaces them.";
 
   const d = s.draft;
   if (document.activeElement !== $("time")) $("time").value = L.alarmTime(d);
   for (const chip of $("days").children) chip.setAttribute("aria-pressed", String(!!(d.days & Number(chip.dataset.bit))));
   const unsaved = r?.kind !== "set" || r.alarm.hour !== d.hour || r.alarm.minute !== d.minute || r.alarm.days !== d.days;
-  renderRamp(d, unsaved);   // the lamp's sunrise; while editing, a preview of the one about to be saved
   const blocker = s.alarmBusy ? null : !d.days ? "Pick at least one day." : null;
   $("saveBtn").textContent = s.alarmBusy ? "Saving…" : unsaved ? "Save alarm" : "Saved on the lamp";
   $("saveBtn").disabled = s.alarmBusy || !!blocker || !unsaved;
@@ -253,16 +231,22 @@ function render() {
 }
 
 // ---- colour & brightness -------------------------------------------------------------------
-// One panel: White (warmth) or Colour (a wheel), and one brightness slider for both. Every change is
-// sent straight away, but only the LATEST value goes out once the previous send has finished, so a
-// drag never piles commands up on a lamp that takes one operation at a time.
+// One screen: White (warmth) or Colour (a wheel), and one brightness slider for both. The marker and
+// the % move while a finger drags, but the lamp is only told when the finger LIFTS - live updates made
+// it flash (his feedback, 25 Oct 2026). Only the latest value is ever queued.
 
 const light = { mode: "white", hue: 30, sat: 1, level: 1, cool: 0 };   // what the panel shows
 let pendingLight = null, sendingLight = false;
+let lampMode = null;   // "white" or "colour": what the lamp is showing, so a change sends ONE command
+// Near the wheel's centre the colour is white. White made from the red, green and blue LEDs is far
+// dimmer than the lamp's own white LEDs (his report: "the same cool white is just dimmer"), so the
+// centre zone uses the white LEDs, at the warmth last set under White.
+const WHEEL_WHITE_ZONE = 0.12;
 
 /** Fill the panel from what the lamp reported. */
 function lightFromLamp(l) {
   if (!l) return;
+  lampMode = l.red || l.green || l.blue ? "colour" : "white";
   if (l.red || l.green || l.blue) {
     const { h, s, v } = L.rgbToHsv(l.red, l.green, l.blue);
     Object.assign(light, { mode: "colour", hue: h, sat: s, level: Math.max(0.01, v) });
@@ -272,19 +256,31 @@ function lightFromLamp(l) {
   }
 }
 
-/** The commands for the panel's current setting (switching the lamp on first if it is off). */
+/** White or colour, as the lamp will show it (the wheel's centre zone counts as white). */
+const sendsWhite = () => light.mode === "white" || light.sat < WHEEL_WHITE_ZONE;
+
+/**
+ * The commands for the current setting: switch on first if the lamp is off, zero the other set of
+ * LEDs only when changing between white and colour (zeroing every time made a visible flash), then
+ * the one command that sets the light.
+ */
 function lightCommands() {
   const cmds = state.lamp && !state.lamp.on ? [L.power(true)] : [];
-  if (light.mode === "colour") return [...cmds, ...L.colourCommands(...L.atBrightness(L.hueToRgb(light.hue, light.sat), light.level))];
-  return [...cmds, ...L.whiteCommands(...L.whiteAt(light.level, light.cool))];
+  const white = sendsWhite();
+  const pair = white ? L.whiteCommands(...L.whiteAt(light.level, light.cool))
+    : L.colourCommands(...L.atBrightness(L.hueToRgb(light.hue, light.sat), light.level));
+  const switching = lampMode !== (white ? "white" : "colour");
+  lampMode = white ? "white" : "colour";
+  return [...cmds, ...(switching ? pair : pair.slice(1))];
 }
 
 function sendLight() {
   if (!conn) return;
   pendingLight = lightCommands();
   // What the lamp will now show - kept locally so the card and the On/Off switch agree.
-  const rgb = light.mode === "colour" ? L.atBrightness(L.hueToRgb(light.hue, light.sat), light.level) : [0, 0, 0];
-  const [warm, cool] = light.mode === "white" ? L.whiteAt(light.level, light.cool) : [0, 0];
+  const white = sendsWhite();
+  const rgb = white ? [0, 0, 0] : L.atBrightness(L.hueToRgb(light.hue, light.sat), light.level);
+  const [warm, cool] = white ? L.whiteAt(light.level, light.cool) : [0, 0];
   state.lamp = { ...(state.lamp || {}), on: true, mode: 0x61, red: rgb[0], green: rgb[1], blue: rgb[2], warm, cool };
   if (!sendingLight) pumpLight();
 }
@@ -361,20 +357,27 @@ function setupLightSheet() {
   drawWheel();
   $("lightBtn").onclick = () => { lightFromLamp(state.lamp); renderSheet(); showLightView(true); };
   $("sheetDone").onclick = () => showLightView(false);
+  // White is one tap, so it goes to the lamp at once. Colour only shows the wheel: nothing is sent
+  // until a colour is picked (sending at once was a second source of the "dimmer" white).
   $("modeWhite").onclick = () => { light.mode = "white"; renderSheet(); sendLight(); };
-  $("modeColour").onclick = () => { light.mode = "colour"; renderSheet(); sendLight(); };
-  $("warmth").oninput = (e) => { light.cool = Number(e.target.value) / 100; renderSheet(); sendLight(); };
-  $("bright").oninput = (e) => { light.level = Number(e.target.value) / 100; renderSheet(); sendLight(); };
+  $("modeColour").onclick = () => { light.mode = "colour"; renderSheet(); };
+  // Sliders: "input" moves the readout while dragging; "change" fires on release and sends.
+  $("warmth").oninput = (e) => { light.cool = Number(e.target.value) / 100; renderSheet(); };
+  $("bright").oninput = (e) => { light.level = Number(e.target.value) / 100; renderSheet(); };
+  $("warmth").onchange = () => sendLight();
+  $("bright").onchange = () => sendLight();
   const pick = (e) => {
     const box = $("wheel").getBoundingClientRect();
     const dx = e.clientX - box.left - box.width / 2, dy = e.clientY - box.top - box.height / 2;
     light.hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
     light.sat = Math.min(1, Math.hypot(dx, dy) / (box.width / 2));
-    renderSheet(); sendLight();
+    if (light.sat < WHEEL_WHITE_ZONE) light.sat = 0;   // snap to the centre: the white LEDs
+    renderSheet();
   };
   const wheel = $("wheel");
   wheel.addEventListener("pointerdown", (e) => { wheel.setPointerCapture(e.pointerId); pick(e); });
   wheel.addEventListener("pointermove", (e) => { if (wheel.hasPointerCapture(e.pointerId)) pick(e); });
+  wheel.addEventListener("pointerup", (e) => { pick(e); sendLight(); });   // the finger lifted: send
 }
 
 /** Swap the page for the colour screen and back. */
